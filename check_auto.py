@@ -22,11 +22,12 @@ gevonden = set()
 
 for link in matches:
 
-    # Alleen Seat Leon
+    # Alleen Seat Leon advertenties
     if "seat-leon" not in link.lower():
         continue
 
     volledige_link = "https://www.autoscout24.nl" + link
+
     gevonden.add(volledige_link)
 
 print("Leon advertenties:", len(gevonden))
@@ -43,20 +44,50 @@ print("Nieuw:", len(nieuwe))
 
 if nieuwe:
 
-    inhoud = (
-        "Nieuwe Seat Leon advertenties gevonden:\n\n"
-        + "\n\n".join(sorted(nieuwe))
-    )
+    inhoud = """
+🚗 Seat Leon Agent
+
+Er zijn nieuwe advertenties gevonden die voldoen aan jouw criteria:
+
+• Seat Leon
+• Benzine
+• Handgeschakeld
+• Zwart
+• Vanaf 2016
+• Max €12.500
+• Max 150.000 km
+"""
+
+    for nummer, advertentie in enumerate(sorted(nieuwe), start=1):
+        inhoud += f"""
+
+━━━━━━━━━━━━━━━━━━━━
+
+Advertentie #{nummer}
+
+{advertentie}
+"""
+
+    inhoud += """
+
+━━━━━━━━━━━━━━━━━━━━
+
+Automatisch gegenereerd door GitHub Actions.
+"""
 
     msg = MIMEText(inhoud, "plain", "utf-8")
-    msg["Subject"] = f"{len(nieuwe)} nieuwe Seat Leon advertentie(s)"
+
+    msg["Subject"] = f"🚗 {len(nieuwe)} nieuwe Seat Leon advertentie(s)"
     msg["From"] = EMAIL
     msg["To"] = EMAIL
 
     server = smtplib.SMTP("smtp.gmail.com", 587)
     server.starttls()
+
     server.login(EMAIL, PASSWORD)
+
     server.send_message(msg)
+
     server.quit()
 
     with open("seen_ads.txt", "a", encoding="utf-8") as f:
