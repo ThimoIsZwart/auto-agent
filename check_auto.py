@@ -81,7 +81,8 @@ for advertentie_url in sorted(nieuwe_links):
         )
         print("=== ADVERTENTIE HTML ===")
         print(pagina.text[:15000])
-        break
+        
+        raise SystemExit()
 
         soup = BeautifulSoup(
             pagina.text,
