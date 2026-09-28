@@ -204,9 +204,6 @@ if autos:
      {kaarten}
 
      <hr>
-     <p style="color:#777;">
-         Automatisch gegenereerd door jouw GitHub Auto Agent.
-     </p>
  </body>
  </html>
  """
