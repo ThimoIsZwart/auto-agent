@@ -8,29 +8,23 @@ from email.mime.text import MIMEText
 EMAIL = os.environ["EMAIL_USER"]
 PASSWORD = os.environ["EMAIL_PASSWORD"]
 
-URL = "https://www.autoscout24.nl/lst/seat/leon/ft_benzine/tr_handgeschakeld/bc_zwart?priceto=12500&fregfrom=2016&cy=NL&damaged_listing=exclude&desc=0&kmto=150000&powertype=kw&sort=standard&ustate=N%2CU&atype=C&mcat=ma64mo15869"
+SEARCH_URL = "https://www.autoscout24.nl/lst/seat/leon/ft_benzine/tr_handgeschakeld/bc_zwart?priceto=12500&fregfrom=2016&cy=NL&damaged_listing=exclude&desc=0&kmto=150000&powertype=kw&sort=standard&ustate=N%2CU&atype=C&mcat=ma64mo15869"
 
-headers = {
+HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-response = requests.get(URL, headers=headers)
-
-print("Status:", response.status_code)
+response = requests.get(SEARCH_URL, headers=HEADERS)
 
 matches = re.findall(r'/aanbod/[^"]+', response.text)
 
 gevonden = set()
 
 for link in matches:
-
     if "seat-leon" not in link.lower():
         continue
 
-    volledige_link = "https://www.autoscout24.nl" + link
-    gevonden.add(volledige_link)
-
-print("Leon advertenties:", len(gevonden))
+    gevonden.add("https://www.autoscout24.nl" + link)
 
 if os.path.exists("seen_ads.txt"):
     with open("seen_ads.txt", "r", encoding="utf-8") as f:
@@ -44,64 +38,171 @@ print("Nieuw:", len(nieuwe))
 
 if nieuwe:
 
-    inhoud = """
-🚗 SEAT LEON AGENT
+    kaarten = ""
 
-Er zijn nieuwe advertenties gevonden die voldoen aan jouw wensen:
+    for advertentie in sorted(nieuwe):
 
-✅ Seat Leon
-✅ Benzine
-✅ Handgeschakeld
-✅ Zwart
-✅ Vanaf 2016
-✅ Max €12.500
-✅ Max 150.000 km
+        titel = "Seat Leon"
+        prijs = "Onbekend"
+        kmstand = "Onbekend"
+        bouwjaar = "Onbekend"
+        brandstof = "Onbekend"
+        transmissie = "Onbekend"
 
-"""
+        try:
 
-    for nummer, advertentie in enumerate(sorted(nieuwe), start=1):
+            pagina = requests.get(
+                advertentie,
+                headers=HEADERS,
+                timeout=20
+            )
 
-        titel = advertentie.split("/aanbod/")[1]
-        titel = titel.split("-cat_")[0]
-        titel = titel.replace("-", " ").title()
+            soup = BeautifulSoup(
+                pagina.text,
+                "html.parser"
+            )
 
-        inhoud += f"""
+            if soup.title:
+                titel = soup.title.text.split("|")[0].strip()
 
-══════════════════════════════════════
+            tekst = soup.get_text(
+                " ",
+                strip=True
+            )
 
-🚗 Advertentie #{nummer}
+            prijs_match = re.search(
+                r'€\s?[0-9\.\,]+',
+                tekst
+            )
 
-📝 {titel}
+            if prijs_match:
+                prijs = prijs_match.group(0)
 
-🔗 Link:
-{advertentie}
+            km_match = re.search(
+                r'([0-9\.]{2,10})\s*km',
+                tekst,
+                re.IGNORECASE
+            )
 
-"""
+            if km_match:
+                kmstand = km_match.group(1) + " km"
 
-    inhoud += """
+            bouwjaar_match = re.search(
+                r'\b(20[0-2][0-9]|19[9][0-9])\b',
+                tekst
+            )
 
-══════════════════════════════════════
+            if bouwjaar_match:
+                bouwjaar = bouwjaar_match.group(1)
 
-Dit overzicht is automatisch gegenereerd door jouw GitHub Auto Agent.
+            if "Benzine" in tekst:
+                brandstof = "Benzine"
 
-Veel succes met de zoektocht! 🚗
-"""
+            if "Handgeschakeld" in tekst:
+                transmissie = "Handgeschakeld"
 
-    msg = MIMEText(inhoud, "plain", "utf-8")
+        except Exception as e:
+            print("Fout:", e)
 
-    msg["Subject"] = f"🚗 {len(nieuwe)} nieuwe Seat Leon advertentie(s)"
+        kaarten += f"""
+        <div style="
+            border:1px solid #dcdcdc;
+            border-radius:12px;
+            padding:16px;
+            margin-bottom:20px;
+            background:#fafafa;
+        ">
+
+            <h2 style="margin:0;color:#0f62fe;">
+                🚗 {titel}
+            </h2>
+
+            <p>
+                💰 <b>{prijs}</b><br>
+                📅 <b>{bouwjaar}</b><br>
+                🛣️ <b>{kmstand}</b><br>
+                ⛽ <b>{brandstof}</b><br>
+                ⚙️ <b>{transmissie}</b>
+            </p>
+
+            <p>
+                {advertentie}
+                    Bekijk advertentie
+                </a>
+            </p>
+
+        </div>
+        """
+
+    html = f"""
+    <html>
+    <body style="font-family:Arial,sans-serif;">
+
+        <h1 style="color:#0f62fe;">
+            🚗 Nieuwe Seat Leon advertenties
+        </h1>
+
+        <p>
+            Er zijn vandaag
+            <strong>{len(nieuwe)}</strong>
+            nieuwe advertenties gevonden.
+        </p>
+
+        <p>
+            Criteria:
+        </p>
+
+        <ul>
+            <li>Seat Leon</li>
+            <li>Benzine</li>
+            <li>Handgeschakeld</li>
+            <li>Zwart</li>
+            <li>Bouwjaar vanaf 2016</li>
+            <li>Tot €12.500</li>
+            <li>Max 150.000 km</li>
+        </ul>
+
+        {kaarten}
+
+        <hr>
+
+        <small>
+            Automatisch verstuurd door jouw GitHub Auto Agent.
+        </small>
+
+    </body>
+    </html>
+    """
+
+    msg = MIMEText(
+        html,
+        "html",
+        "utf-8"
+    )
+
+    msg["Subject"] = (
+        f"🚗 {len(nieuwe)} nieuwe Seat Leon advertentie(s)"
+    )
+
     msg["From"] = EMAIL
     msg["To"] = EMAIL
 
-    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server = smtplib.SMTP(
+        "smtp.gmail.com",
+        587
+    )
+
     server.starttls()
     server.login(EMAIL, PASSWORD)
-
     server.send_message(msg)
-
     server.quit()
 
-    with open("seen_ads.txt", "a", encoding="utf-8") as f:
+    with open(
+        "seen_ads.txt",
+        "a",
+        encoding="utf-8"
+    ) as f:
+
         for advertentie in sorted(nieuwe):
             f.write(advertentie + "\n")
 
