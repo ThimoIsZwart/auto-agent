@@ -10,4 +10,8 @@ response = requests.get(
 )
 
 print("Status:", response.status_code)
-print(response.text[:500])
+
+with open("pagina.html", "w", encoding="utf-8") as f:
+    f.write(response.text)
+
+print(response.text[:2000])
