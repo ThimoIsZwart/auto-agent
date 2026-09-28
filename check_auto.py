@@ -1,10 +1,16 @@
-import requests
+import os
 import re
+import requests
+import smtplib
+from email.mime.text import MIMEText
 
-url = "https://www.autoscout24.nl/lst/seat/leon/ft_benzine/tr_handgeschakeld/bc_zwart?priceto=12500&fregfrom=2016&cy=NL&damaged_listing=exclude&desc=0&kmto=150000&powertype=kw&sort=standard&ustate=N%2CU&atype=C&mcat=ma64mo15869"
+EMAIL = os.environ["EMAIL_USER"]
+PASSWORD = os.environ["EMAIL_PASSWORD"]
+
+URL = "https://www.autoscout24.nl/lst/seat/leon/ft_benzine/tr_handgeschakeld/bc_zwart?priceto=12500&fregfrom=2016&cy=NL&damaged_listing=exclude&desc=0&kmto=150000&powertype=kw&sort=standard&ustate=N%2CU&atype=C&mcat=ma64mo15869"
 
 response = requests.get(
-    url,
+    URL,
     headers={"User-Agent": "Mozilla/5.0"}
 )
 
@@ -12,7 +18,52 @@ print("Status:", response.status_code)
 
 matches = re.findall(r'/aanbod/[^"]+', response.text)
 
-print("Aantal gevonden:", len(matches))
+gevonden = set()
 
-for link in matches[:20]:
-    print(link)
+for link in matches:
+
+    # Alleen Seat Leon
+    if "seat-leon" not in link.lower():
+        continue
+
+    volledige_link = "https://www.autoscout24.nl" + link
+    gevonden.add(volledige_link)
+
+print("Leon advertenties:", len(gevonden))
+
+if os.path.exists("seen_ads.txt"):
+    with open("seen_ads.txt", "r", encoding="utf-8") as f:
+        gezien = set(line.strip() for line in f)
+else:
+    gezien = set()
+
+nieuwe = gevonden - gezien
+
+print("Nieuw:", len(nieuwe))
+
+if nieuwe:
+
+    inhoud = (
+        "Nieuwe Seat Leon advertenties gevonden:\n\n"
+        + "\n\n".join(sorted(nieuwe))
+    )
+
+    msg = MIMEText(inhoud, "plain", "utf-8")
+    msg["Subject"] = f"{len(nieuwe)} nieuwe Seat Leon advertentie(s)"
+    msg["From"] = EMAIL
+    msg["To"] = EMAIL
+
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(EMAIL, PASSWORD)
+    server.send_message(msg)
+    server.quit()
+
+    with open("seen_ads.txt", "a", encoding="utf-8") as f:
+        for advertentie in sorted(nieuwe):
+            f.write(advertentie + "\n")
+
+    print("Mail verzonden")
+
+else:
+    print("Geen nieuwe advertenties")
