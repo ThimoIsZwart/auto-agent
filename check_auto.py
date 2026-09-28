@@ -79,6 +79,9 @@ for advertentie_url in sorted(nieuwe_links):
             headers=HEADERS,
             timeout=30
         )
+        print("=== ADVERTENTIE HTML ===")
+        print(pagina.text[:15000])
+        break
 
         soup = BeautifulSoup(
             pagina.text,
