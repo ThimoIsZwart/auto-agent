@@ -9,7 +9,7 @@ server.starttls()
 
 server.login(EMAIL, PASSWORD)
 
-onderwerp = "✅ Auto Agent Test"
+onderwerp = "Auto Agent Test"
 bericht = """
 Dit is een testmail van je GitHub Auto Agent.
 
