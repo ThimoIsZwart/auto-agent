@@ -2,6 +2,8 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 
+print("test 17:40")
+
 EMAIL = os.environ["EMAIL_USER"]
 PASSWORD = os.environ["EMAIL_PASSWORD"]
 
