@@ -2,7 +2,7 @@ name: Auto Agent
 
 on:
   schedule:
-    - cron: '0,30 * * * *'
+    - cron: '13,43 * * * *'
   workflow_dispatch:
 
 permissions:
