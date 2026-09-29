@@ -134,25 +134,48 @@ def haal_vakgarage_autos():
 
         soup = BeautifulSoup(response.text, "html.parser")
         
+        negeer_paden = ["/aankoopadvies", "/elektrische-occasions", "/hybride-occasions"]
+
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            if "/occasions/" in href and href != "/occasions":
+            
+            # Controleer of het een specifieke occasion-link is en geen algemene overzichtspagina
+            if href.startswith("/occasions/") and href != "/occasions" and not any(href.endswith(p) for p in negeer_paden):
+                
+                # Check of het geen merkpagina is (zoals /occasions/audi of /occasions/seat)
+                delen = [d for d in href.split("/") if d]
+                if len(delen) < 2:  
+                    continue
+
                 full_url = "https://www.vakgarage.nl" + href if href.startswith("/") else href
                 
                 if any(auto["url"] == full_url for auto in gevonden_autos):
                     continue
 
-                gevonden_autos.append({
-                    "titel": "Seat Leon",
-                    "url": full_url,
-                    "prijs": 0,       # De zoek-URL filtert al vooraf op de site zelf
-                    "km": 0,
-                    "bouwjaar": MIN_BOUWJAAR,
-                    "transmissie": "Onbekend",
-                    "kleur": "Onbekend",
-                    "foto": "",
-                    "bron": "Vakgarage"
-                })
+                # Detailpagina ophalen om kleur en transmissie te controleren
+                try:
+                    detail_res = requests.get(full_url, headers=headers, timeout=10)
+                    if detail_res.status_code != 200:
+                        continue
+                    
+                    detail_html = detail_res.text.lower()
+
+                    kleur = "Zwart" if "zwart" in detail_html or "black" in detail_html else "Anders"
+                    transmissie = "Handgeschakeld" if "hand" in detail_html or "handgeschakeld" in detail_html else "Automatisch"
+
+                    gevonden_autos.append({
+                        "titel": "Seat Leon",
+                        "url": full_url,
+                        "prijs": 0,
+                        "km": 0,
+                        "bouwjaar": MIN_BOUWJAAR,
+                        "transmissie": transmissie,
+                        "kleur": kleur,
+                        "foto": "",
+                        "bron": "Vakgarage"
+                    })
+                except Exception as e:
+                    print(f"Fout bij ophalen detailpagina Vakgarage {full_url}: {e}")
 
     except Exception as e:
         print(f"Fout bij ophalen Vakgarage: {e}")
@@ -268,16 +291,18 @@ def main():
         sla_geziene_ad_op(url)
         geziene_ads.add(url)
 
-        # Filters toepassen
+        # Cijfermatige filters
         if auto["prijs"] and auto["prijs"] > MAX_PRIJS:
             continue
         if auto["km"] and auto["km"] > MAX_KM:
             continue
         if auto["bouwjaar"] and auto["bouwjaar"] < MIN_BOUWJAAR:
             continue
-        if auto["kleur"] != "Onbekend" and "zwart" not in auto["kleur"].lower():
+        
+        # Strenge filters op kleur en transmissie
+        if "zwart" not in auto["kleur"].lower():
             continue
-        if auto["transmissie"] != "Onbekend" and "hand" not in auto["transmissie"].lower():
+        if "hand" not in auto["transmissie"].lower():
             continue
 
         goedgekeurde_autos.append(auto)
