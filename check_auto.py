@@ -1,229 +1,306 @@
-import json
 import os
 import re
+import json
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
 
-EMAIL = os.environ["EMAIL_USER"]
-PASSWORD = os.environ["EMAIL_PASSWORD"]
-
+# --- CONFIGURATIE & CRITERIA ---
 MAX_PRIJS = 12500
 MAX_KM = 150000
 MIN_BOUWJAAR = 2016
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+RECEIVER_EMAIL = EMAIL_USER  # Stuur melding naar jezelf
 
-SEARCH_URL = "https://www.autoscout24.nl/lst/seat/leon/ft_benzine/tr_handgeschakeld/bc_zwart?priceto=12500&fregfrom=2016&cy=NL&damaged_listing=exclude&desc=0&kmto=150000&powertype=kw&sort=standard&ustate=N%2CU&atype=C&mcat=ma64mo15869"
+SEEN_ADS_FILE = "seen_ads.txt"
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
+def laad_geziene_ads():
+    if os.path.exists(SEEN_ADS_FILE):
+        with open(SEEN_ADS_FILE, "r") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
 
-def extract_car_data(html):
- result = {
-     "titel": "Seat Leon",
-     "prijs": None,
-     "bouwjaar": None,
-     "km": None,
-     "kleur": None,
-     "transmissie": None,
-     "foto": None,
- }
+def sla_geziene_ad_op(url):
+    with open(SEEN_ADS_FILE, "a") as f:
+        f.write(f"{url}\n")
 
- matches = re.findall(
-     r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL
- )
+# --- 1. AUTOSCOUT24 SCRAPER ---
+def haal_autoscout_autos():
+    url = "https://www.autoscout24.nl/lst/seat/leon?atype=C&ustate=N%2CU&sort=age&desc=1"
+    gevonden_autos = []
+    
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print(f"AutoScout24 status code: {response.status_code}")
+            return gevonden_autos
 
- for match in matches:
-     try:
-         data = json.loads(match)
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/aanbod/" in href and "seat-leon" in href.lower():
+                full_url = "https://www.autoscout24.nl" + href if href.startswith("/") else href
+                links.add(full_url.split("?")[0])
 
-         if data.get("@type") != "Product":
-             continue
+        for link in links:
+            try:
+                ad_res = requests.get(link, headers=HEADERS, timeout=10)
+                if ad_res.status_code != 200:
+                    continue
+                
+                # Probeer JSON-LD uit te lezen
+                scripts = re.findall(r'<script type="application/ld\+json">(.*?)</script>', ad_res.text, re.DOTALL)
+                ad_data = {}
+                for script in scripts:
+                    try:
+                        data = json.loads(script)
+                        if isinstance(data, dict) and data.get("@type") in ["Car", "Vehicle", "Product"]:
+                            ad_data = data
+                            break
+                    except json.JSONDecodeError:
+                        continue
 
-         offers = data.get("offers", {})
-         item = offers.get("itemOffered", {})
+                titel = ad_data.get("name", "Seat Leon")
+                
+                # Prijs
+                offers = ad_data.get("offers", {})
+                prijs = int(offers.get("price", 0)) if isinstance(offers, dict) else 0
+                
+                # Specificaties uit HTML of JSON-LD
+                km = 0
+                bouwjaar = 0
+                kleur = "Onbekend"
+                transmissie = "Onbekend"
+                foto = ""
 
-         result["prijs"] = offers.get("price")
-         result["foto"] = item.get("image")
-         result["kleur"] = item.get("color")
-         result["transmissie"] = item.get("vehicleTransmission")
-         result["titel"] = item.get("name", "Seat Leon")
+                if "image" in ad_data:
+                    foto = ad_data["image"][0] if isinstance(ad_data["image"], list) else ad_data["image"]
 
-         production_date = item.get("productionDate")
-         if production_date:
-             result["bouwjaar"] = production_date[:4]
+                # RegEx fallback voor specificaties op de pagina
+                km_match = re.search(r'(\d[\d\.]*)\s*km', ad_res.text, re.IGNORECASE)
+                if km_match:
+                    km = int(km_match.group(1).replace(".", ""))
 
-         mileage = item.get("mileageFromOdometer", {})
-         result["km"] = mileage.get("value")
+                jaar_match = re.search(r'(20\d{2})', ad_res.text)
+                if jaar_match:
+                    bouwjaar = int(jaar_match.group(1))
 
-         return result
+                if "zwart" in ad_res.text.lower() or "black" in ad_res.text.lower():
+                    kleur = "Zwart"
+                if "handgeschakeld" in ad_res.text.lower() or "handschaltung" in ad_res.text.lower():
+                    transmissie = "Handgeschakeld"
 
-     except Exception:
-         pass
+                gevonden_autos.append({
+                    "titel": titel,
+                    "url": link,
+                    "prijs": prijs,
+                    "km": km,
+                    "bouwjaar": bouwjaar,
+                    "transmissie": transmissie,
+                    "kleur": kleur,
+                    "foto": foto,
+                    "bron": "AutoScout24"
+                })
+            except Exception as e:
+                print(f"Fout bij uitlezen AutoScout link {link}: {e}")
 
- return result
+    except Exception as e:
+        print(f"Fout bij ophalen AutoScout24: {e}")
 
+    return gevonden_autos
 
-print("Seat Leon Agent gestart")
+# --- 2. VAKGARAGE API ---
+def haal_vakgarage_autos():
+    url = "https://www.vakgarage.nl/api/occasions"
+    headers = {
+        **HEADERS,
+        "Accept": "application/json",
+        "Referer": "https://www.vakgarage.nl/occasions"
+    }
+    params = {
+        "merk[]": "SEAT",
+        "model[SEAT][]": "Leon",
+        "prijs": f";{MAX_PRIJS}",
+        "tellerstand": f";{MAX_KM}",
+        "bouwjaar": f"{MIN_BOUWJAAR};",
+        "sort": "created_at_desc",
+        "page": 1
+    }
 
-response = requests.get(SEARCH_URL, headers=HEADERS, timeout=30)
-print("Status:", response.status_code)
+    gevonden_autos = []
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("data", []) or data.get("occasions", [])
 
-matches = re.findall(r'/aanbod/[^"]+', response.text)
-gevonden = set()
+            for item in items:
+                titel = f"{item.get('brand', 'SEAT')} {item.get('model', 'Leon')} {item.get('title', '')}".strip()
+                link = f"https://www.vakgarage.nl/occasions/{item.get('slug', item.get('id'))}"
+                prijs = int(item.get("price", 0))
+                km = int(item.get("mileage", 0))
+                bouwjaar = int(item.get("build_year", item.get("year", 0)))
+                transmissie = item.get("transmission", "Onbekend")
+                kleur = item.get("color", "Onbekend")
+                foto = item.get("image", item.get("first_image", ""))
 
-for link in matches:
- if "seat-leon" not in link.lower():
-     continue
- gevonden.add("https://www.autoscout24.nl" + link)
+                gevonden_autos.append({
+                    "titel": titel,
+                    "url": link,
+                    "prijs": prijs,
+                    "km": km,
+                    "bouwjaar": bouwjaar,
+                    "transmissie": transmissie,
+                    "kleur": kleur,
+                    "foto": foto,
+                    "bron": "Vakgarage"
+                })
+        else:
+            print(f"Vakgarage API status code: {response.status_code}")
+    except Exception as e:
+        print(f"Fout bij ophalen Vakgarage: {e}")
 
-print("Leon advertenties:", len(gevonden))
+    return gevonden_autos
 
-if os.path.exists("seen_ads.txt"):
- with open("seen_ads.txt", "r", encoding="utf-8") as f:
-     gezien = set(line.strip() for line in f if line.strip())
-else:
- gezien = set()
+# --- 3. E-MAIL VERZENDEN ---
+def stuur_email(goedgekeurde_autos):
+    if not EMAIL_USER or not EMAIL_PASSWORD:
+        print("E-mail credentials ontbreken in de omgevingsvariabelen.")
+        return
 
-nieuwe_links = gevonden - gezien
-print("Nieuw:", len(nieuwe_links))
+    kaarten = ""
+    for auto in goedgekeurde_autos:
+        foto_html = f'<img src="{auto["foto"]}" style="max-width:100%; border-radius:6px; margin-bottom:15px;">' if auto["foto"] else ''
+        prijs_text = f"€ {auto['prijs']:,}".replace(",", ".") if auto["prijs"] else "Onbekend"
+        km_text = f"{auto['km']:,} km".replace(",", ".") if auto["km"] else "Onbekend"
 
-autos = []
+        kaarten += f"""
+        <div style="border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
+            {foto_html}
+            <h2 style="color:#0d47a1; margin-top:0; margin-bottom:15px;">
+                🚗 {auto['titel']} ({auto['bron']})
+            </h2>
+            <table style="font-size:15px; line-height:2;">
+                <tr>
+                    <td><b>💰 Prijs</b></td>
+                    <td>{prijs_text}</td>
+                </tr>
+                <tr>
+                    <td><b>📅 Bouwjaar</b></td>
+                    <td>{auto['bouwjaar']}</td>
+                </tr>
+                <tr>
+                    <td><b>🛣️ Kilometerstand</b></td>
+                    <td>{km_text}</td>
+                </tr>
+                <tr>
+                    <td><b>⚙️ Transmissie</b></td>
+                    <td>{auto['transmissie']}</td>
+                </tr>
+                <tr>
+                    <td><b>🎨 Kleur</b></td>
+                    <td>{auto['kleur']}</td>
+                </tr>
+            </table>
+            <div style="margin-top:20px;">
+                <a href="{auto['url']}" style="background:#0d6efd; color:white; padding:10px 20px; text-decoration:none; border-radius:5px; display:inline-block;">
+                    Bekijk advertentie
+                </a>
+            </div>
+        </div>
+        """
 
-for advertentie_url in sorted(nieuwe_links):
- try:
-     pagina = requests.get(
-         advertentie_url, headers=HEADERS, timeout=30
-     )
-     data = extract_car_data(pagina.text)
+    html = f"""
+    <html>
+    <body style="font-family:Arial,sans-serif; max-width:900px;">
+        <h1 style="color:#0d6efd;">
+            🚗 Nieuwe Seat Leon advertenties
+        </h1>
+        <p>
+            Er zijn <strong>{len(goedgekeurde_autos)}</strong> nieuwe advertenties gevonden.
+        </p>
+        <p>Criteria:</p>
+        <ul>
+            <li>Seat Leon</li>
+            <li>Benzine</li>
+            <li>Handgeschakeld</li>
+            <li>Zwart</li>
+            <li>Vanaf {MIN_BOUWJAAR}</li>
+            <li>Max €{MAX_PRIJS:,}</li>
+            <li>Max {MAX_KM:,} km</li>
+        </ul>
 
-     if data["prijs"] and int(data["prijs"]) > MAX_PRIJS:
-         continue
+        {kaarten}
 
-     if data["km"] and int(data["km"]) > MAX_KM:
-         continue
+        <hr>
+    </body>
+    </html>
+    """
 
-     if data["bouwjaar"] and int(data["bouwjaar"]) < MIN_BOUWJAAR:
-         continue
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🚗 {len(goedgekeurde_autos)} Nieuwe Seat Leon(s) gevonden!"
+    msg["From"] = EMAIL_USER
+    msg["To"] = RECEIVER_EMAIL
+    msg.attach(MIMEText(html, "html"))
 
-     if data["kleur"] and "zwart" not in data["kleur"].lower():
-         continue
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, RECEIVER_EMAIL, msg.as_string())
+        print("E-mail succesvol verzonden!")
+    except Exception as e:
+        print(f"Fout bij versturen e-mail: {e}")
 
-     if data["transmissie"] and "hand" not in data["transmissie"].lower():
-         continue
+# --- HOOFDPROGRAMMA ---
+def main():
+    print("Seat Leon Agent gestart...")
+    geziene_ads = laad_geziene_ads()
 
-     data["url"] = advertentie_url
-     autos.append(data)
+    # Haal alle advertenties op
+    alle_kandidaten = haal_autoscout_autos() + haal_vakgarage_autos()
+    print(f"Totaal opgehaald: {len(alle_kandidaten)} advertenties")
 
- except Exception as e:
-     print(e)
+    goedgekeurde_autos = []
 
-if autos:
- kaarten = ""
+    for auto in alle_kandidaten:
+        url = auto["url"]
+        
+        # Sla over als we de advertentie al eerder hebben gezien
+        if url in geziene_ads:
+            continue
 
- for auto in autos:
-     prijs_text = (
-         f"€ {int(auto['prijs']):,}".replace(",", ".")
-         if auto["prijs"]
-         else "-"
-     )
-     km_text = (
-         f"{int(auto['km']):,} km".replace(",", ".")
-         if auto["km"]
-         else "-"
-     )
+        # Markeer als gezien zodat we hem niet nogmaals verwerken
+        sla_geziene_ad_op(url)
+        geziene_ads.add(url)
 
-     bouwjaar = auto["bouwjaar"] or "-"
-     transmissie = auto["transmissie"] or "-"
-     kleur = auto["kleur"] or "-"
-     foto = auto["foto"] or ""
+        # Filters toepassen
+        if auto["prijs"] and auto["prijs"] > MAX_PRIJS:
+            continue
+        if auto["km"] and auto["km"] > MAX_KM:
+            continue
+        if auto["bouwjaar"] and auto["bouwjaar"] < MIN_BOUWJAAR:
+            continue
+        if auto["kleur"] != "Onbekend" and "zwart" not in auto["kleur"].lower():
+            continue
+        if auto["transmissie"] != "Onbekend" and "hand" not in auto["transmissie"].lower():
+            continue
 
-     foto_html = ""
-     if foto:
-         foto_html = f"""
-         <img src="{foto}" style="width:100%; max-width:600px; border-radius:10px; margin-bottom:25px; background:#fafafa;">
-         """
+        goedgekeurde_autos.append(auto)
 
-     kaarten += f"""
-     <div style="border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
-         {foto_html}
-         <h2 style="color:#0d47a1; margin-top:0; margin-bottom:15px;">
-             🚗 {auto['titel']}
-         </h2>
-         <table style="font-size:15px; line-height:2;">
-             <tr>
-                 <td><b>💰 Prijs</b></td>
-                 <td>{prijs_text}</td>
-             </tr>
-             <tr>
-                 <td><b>📅 Bouwjaar</b></td>
-                 <td>{bouwjaar}</td>
-             </tr>
-             <tr>
-                 <td><b>🛣️ Kilometerstand</b></td>
-                 <td>{km_text}</td>
-             </tr>
-             <tr>
-                 <td><b>⚙️ Transmissie</b></td>
-                 <td>{transmissie}</td>
-             </tr>
-             <tr>
-                 <td><b>🎨 Kleur</b></td>
-                 <td>{kleur}</td>
-             </tr>
-         </table>
-         <div style="margin-top:20px;">
-             <a href="{auto['url']}" style="background:#0d6efd; color:white; padding:10px 20px; text-decoration:none; border-radius:5px; display:inline-block;">
-                 Bekijk advertentie
-             </a>
-         </div>
-     </div>
-     """
+    if goedgekeurde_autos:
+        print(f"{len(goedgekeurde_autos)} nieuwe matching advertentie(s) gevonden! E-mail sturen...")
+        stuur_email(goedgekeurde_autos)
+    else:
+        print("Geen nieuwe geschikte advertenties gevonden.")
 
- html = f"""
- <html>
- <body style="font-family:Arial,sans-serif; max-width:900px;">
-     <h1 style="color:#0d6efd;">
-         🚗 Nieuwe Seat Leon advertenties
-     </h1>
-     <p>
-         Er zijn <strong>{len(autos)}</strong> nieuwe advertenties gevonden.
-     </p>
-     <p>Criteria:</p>
-     <ul>
-         <li>Seat Leon</li>
-         <li>Benzine</li>
-         <li>Handgeschakeld</li>
-         <li>Zwart</li>
-         <li>Vanaf 2016</li>
-         <li>Max €12.500</li>
-         <li>Max 150.000 km</li>
-     </ul>
-
-     {kaarten}
-
-     <hr>
- </body>
- </html>
- """
-
- msg = MIMEText(html, "html", "utf-8")
- msg["Subject"] = f"🚗 {len(autos)} nieuwe Seat Leon advertentie(s)"
- msg["From"] = EMAIL
- msg["To"] = EMAIL
-
- server = smtplib.SMTP("smtp.gmail.com", 587)
- server.starttls()
- server.login(EMAIL, PASSWORD)
- server.send_message(msg)
- server.quit()
-
- with open("seen_ads.txt", "a", encoding="utf-8") as f:
-     for link in sorted(nieuwe_links):
-         f.write(link + "\n")
-
- print("Mail verzonden")
-
-else:
- print("Geen nieuwe advertenties")
+if __name__ == "__main__":
+    main()
