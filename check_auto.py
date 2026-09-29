@@ -74,7 +74,6 @@ def haal_autoscout_autos():
                 offers = ad_data.get("offers", {})
                 prijs = int(offers.get("price", 0)) if isinstance(offers, dict) else 0
                 
-                # Specificaties uit HTML of JSON-LD
                 km = 0
                 bouwjaar = 0
                 kleur = "Onbekend"
@@ -84,7 +83,6 @@ def haal_autoscout_autos():
                 if "image" in ad_data:
                     foto = ad_data["image"][0] if isinstance(ad_data["image"], list) else ad_data["image"]
 
-                # RegEx fallback voor specificaties op de pagina
                 km_match = re.search(r'(\d[\d\.]*)\s*km', ad_res.text, re.IGNORECASE)
                 if km_match:
                     km = int(km_match.group(1).replace(".", ""))
@@ -117,54 +115,45 @@ def haal_autoscout_autos():
 
     return gevonden_autos
 
-# --- 2. VAKGARAGE API ---
+# --- 2. VAKGARAGE SCRAPER ---
 def haal_vakgarage_autos():
-    url = "https://www.vakgarage.nl/api/occasions"
+    url = f"https://www.vakgarage.nl/occasions?merk%5B%5D=SEAT&model%5BSEAT%5D%5B%5D=Leon&prijs=%3B{MAX_PRIJS}&tellerstand=%3B{MAX_KM}&bouwjaar={MIN_BOUWJAAR}%3B&sort=created_at_desc"
+    gevonden_autos = []
+    
     headers = {
         **HEADERS,
-        "Accept": "application/json",
-        "Referer": "https://www.vakgarage.nl/occasions"
-    }
-    params = {
-        "merk[]": "SEAT",
-        "model[SEAT][]": "Leon",
-        "prijs": f";{MAX_PRIJS}",
-        "tellerstand": f";{MAX_KM}",
-        "bouwjaar": f"{MIN_BOUWJAAR};",
-        "sort": "created_at_desc",
-        "page": 1
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.vakgarage.nl/"
     }
 
-    gevonden_autos = []
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            items = data.get("data", []) or data.get("occasions", [])
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            print(f"Vakgarage status code: {response.status_code}")
+            return gevonden_autos
 
-            for item in items:
-                titel = f"{item.get('brand', 'SEAT')} {item.get('model', 'Leon')} {item.get('title', '')}".strip()
-                link = f"https://www.vakgarage.nl/occasions/{item.get('slug', item.get('id'))}"
-                prijs = int(item.get("price", 0))
-                km = int(item.get("mileage", 0))
-                bouwjaar = int(item.get("build_year", item.get("year", 0)))
-                transmissie = item.get("transmission", "Onbekend")
-                kleur = item.get("color", "Onbekend")
-                foto = item.get("image", item.get("first_image", ""))
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/occasions/" in href and href != "/occasions":
+                full_url = "https://www.vakgarage.nl" + href if href.startswith("/") else href
+                
+                if any(auto["url"] == full_url for auto in gevonden_autos):
+                    continue
 
                 gevonden_autos.append({
-                    "titel": titel,
-                    "url": link,
-                    "prijs": prijs,
-                    "km": km,
-                    "bouwjaar": bouwjaar,
-                    "transmissie": transmissie,
-                    "kleur": kleur,
-                    "foto": foto,
+                    "titel": "Seat Leon",
+                    "url": full_url,
+                    "prijs": 0,       # De zoek-URL filtert al vooraf op de site zelf
+                    "km": 0,
+                    "bouwjaar": MIN_BOUWJAAR,
+                    "transmissie": "Onbekend",
+                    "kleur": "Onbekend",
+                    "foto": "",
                     "bron": "Vakgarage"
                 })
-        else:
-            print(f"Vakgarage API status code: {response.status_code}")
+
     except Exception as e:
         print(f"Fout bij ophalen Vakgarage: {e}")
 
@@ -179,8 +168,8 @@ def stuur_email(goedgekeurde_autos):
     kaarten = ""
     for auto in goedgekeurde_autos:
         foto_html = f'<img src="{auto["foto"]}" style="max-width:100%; border-radius:6px; margin-bottom:15px;">' if auto["foto"] else ''
-        prijs_text = f"€ {auto['prijs']:,}".replace(",", ".") if auto["prijs"] else "Onbekend"
-        km_text = f"{auto['km']:,} km".replace(",", ".") if auto["km"] else "Onbekend"
+        prijs_text = f"€ {auto['prijs']:,}".replace(",", ".") if auto["prijs"] else "Zie website"
+        km_text = f"{auto['km']:,} km".replace(",", ".") if auto["km"] else "Zie website"
 
         kaarten += f"""
         <div style="border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
@@ -265,7 +254,6 @@ def main():
     print("Seat Leon Agent gestart...")
     geziene_ads = laad_geziene_ads()
 
-    # Haal alle advertenties op
     alle_kandidaten = haal_autoscout_autos() + haal_vakgarage_autos()
     print(f"Totaal opgehaald: {len(alle_kandidaten)} advertenties")
 
@@ -274,11 +262,9 @@ def main():
     for auto in alle_kandidaten:
         url = auto["url"]
         
-        # Sla over als we de advertentie al eerder hebben gezien
         if url in geziene_ads:
             continue
 
-        # Markeer als gezien zodat we hem niet nogmaals verwerken
         sla_geziene_ad_op(url)
         geziene_ads.add(url)
 
